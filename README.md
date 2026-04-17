@@ -197,6 +197,28 @@ This proxy fills the gap by adding `x-ai-gateway-api-key` at the network
 layer. The client only needs to point at `ANTHROPIC_BASE_URL`, which every
 Anthropic client supports.
 
+## Contributing / Releasing
+
+Docker images are built and published automatically via GitHub Actions.
+
+**Every push to `main`** → multi-arch build (amd64+arm64) pushed as `:latest`,
+`:main`, and `:sha-<commit>` to both ghcr.io and Docker Hub.
+
+**Cutting a versioned release:**
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+That triggers:
+1. Multi-arch build pushed as `:v0.2.0`, `:0.2.0`, `:0.2`, `:0`, and `:latest`
+2. A GitHub Release auto-created at the tag, with generated notes and pull
+   commands in the body
+
+No manual steps after pushing the tag. Delete + re-push a tag if you need to
+rebuild an existing version.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

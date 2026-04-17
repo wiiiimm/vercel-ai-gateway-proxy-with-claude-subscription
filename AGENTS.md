@@ -58,18 +58,59 @@ There are no automated tests yet. If you add any:
 
 ## Release / CI
 
-`.github/workflows/publish.yml` builds multi-arch (amd64+arm64) and publishes to:
-- `ghcr.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription`
-- `docker.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription` (if `DOCKERHUB_USERNAME` var + `DOCKERHUB_TOKEN` secret are configured)
+`.github/workflows/publish.yml` handles everything. Two jobs:
 
-Triggers:
-- Push to `main` → `:latest`, `:main`, `:sha-<commit>`
-- Tag `vX.Y.Z` → `:vX.Y.Z`, `:X.Y.Z`, `:X.Y`, `:X`, `:latest`
+1. **`build-and-push`** — builds multi-arch (amd64+arm64) and pushes to:
+   - `ghcr.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription` (auto-auth via `GITHUB_TOKEN`)
+   - `docker.io/<DOCKERHUB_USERNAME>/vercel-ai-gateway-proxy-with-claude-subscription` (needs `DOCKERHUB_USERNAME` var + `DOCKERHUB_TOKEN` secret)
+2. **`release`** — runs only on `v*.*.*` tags. Creates a GitHub Release with auto-generated notes and `docker pull` commands.
 
-To cut a release:
+### Triggers and tag matrix
+
+| Trigger | Docker tags produced | GitHub Release |
+|---|---|---|
+| Push to `main` | `:latest`, `:main`, `:sha-<commit>` | No |
+| Push tag `vX.Y.Z` | `:vX.Y.Z`, `:X.Y.Z`, `:X.Y`, `:X`, `:latest` | Yes |
+| Push tag `vX.Y.Z-rc.N` | `:vX.Y.Z-rc.N`, `:X.Y.Z-rc.N` (no `:latest`) | Yes |
+| Manual dispatch | Whatever matches current ref | Only if tag ref |
+
+### Cutting a release
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
 ```
-git tag v0.2.0 && git push origin v0.2.0
+
+Nothing else. The workflow builds, pushes to both registries, and creates the GitHub Release.
+
+### Re-releasing a bad tag
+
+Don't amend history on main. Delete and re-push the tag:
+
+```bash
+git tag -d v0.1.0
+git push origin :refs/tags/v0.1.0
+# fix the commit if needed
+git tag v0.1.0
+git push origin v0.1.0
 ```
+
+GitHub's Release object also needs deletion if it was created (`gh release delete v0.1.0 --yes`) — the workflow won't overwrite it.
+
+### Secrets / variables required
+
+One-time setup in repo settings:
+
+- **`DOCKERHUB_USERNAME`** (Actions → Variables) — your Docker Hub username
+- **`DOCKERHUB_TOKEN`** (Actions → Secrets) — a Docker Hub access token with `Read, Write, Delete` scope
+
+If either is missing, Docker Hub publishing is skipped (workflow still succeeds for ghcr.io).
+
+### Versioning conventions
+
+- Start at `v0.1.0`. Minor bumps for new features, patch for bug fixes.
+- No pre-v1 stability guarantees.
+- Breaking changes in config (env var renames, mode changes) bump the minor while in `0.x`, major once at `1.0+`.
 
 ## Commit style
 
