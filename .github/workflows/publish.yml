@@ -66,3 +66,28 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Docker images
+
+            - `ghcr.io/${{ github.repository_owner }}/vercel-ai-gateway-proxy-with-claude-subscription:${{ github.ref_name }}`
+            - `docker.io/${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}/vercel-ai-gateway-proxy-with-claude-subscription:${{ github.ref_name }}`
+
+            Multi-arch: `linux/amd64`, `linux/arm64`.
