@@ -101,8 +101,25 @@ Other tools can reuse the resulting token stored in `~/.claude/.credentials.json
 
 ### OpenClaw
 
-OpenClaw strips `ANTHROPIC_BASE_URL` before spawning `claude -p`, so set it in
-Claude Code's own settings file instead:
+[OpenClaw](https://docs.openclaw.ai) (fka Clawdbot) was the project that
+motivated this proxy. It can reuse a local Claude Code CLI login via its
+`claude-cli` auth mode, which delegates LLM calls to `claude -p` as a
+subprocess.
+
+**Step 1 — switch OpenClaw to the `claude-cli` backend.** Run this once in
+the gateway container or on the host:
+
+```bash
+openclaw onboard --non-interactive --accept-risk --auth-choice anthropic-cli --flow manual
+```
+
+That changes the primary model to `claude-cli/claude-sonnet-4-6` (or similar),
+which routes all LLM calls through `claude -p`.
+
+**Step 2 — point Claude Code at this proxy.** OpenClaw explicitly strips
+`ANTHROPIC_BASE_URL` from the child environment before spawning `claude -p`,
+so the env var approach doesn't work. Use Claude Code's own `settings.json`
+instead — Claude reads it after spawn and applies the env vars itself:
 
 ```json
 // ~/.claude/settings.json
@@ -112,6 +129,14 @@ Claude Code's own settings file instead:
   }
 }
 ```
+
+If you're running OpenClaw in Docker alongside this proxy as a sidecar, mount
+`~/.claude/settings.json` into the OpenClaw container so the setting survives
+container rebuilds.
+
+**Step 3 — verify.** Send OpenClaw a message and watch the proxy logs
+(`docker logs -f vercel-ai-gateway-proxy`). You should see `POST /v1/messages`
+entries with your tags attached.
 
 ### Anthropic SDK (Node)
 
