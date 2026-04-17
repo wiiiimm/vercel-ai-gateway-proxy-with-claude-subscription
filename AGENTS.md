@@ -58,10 +58,18 @@ There are no automated tests yet. If you add any:
 
 ## Release / CI
 
-Not set up yet. When setting up:
-- Publish to `ghcr.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription`
-- Tag releases with semver (`v1.0.0`, etc.)
-- GitHub Actions workflow on push to `main` tagged with a version
+`.github/workflows/publish.yml` builds multi-arch (amd64+arm64) and publishes to:
+- `ghcr.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription`
+- `docker.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription` (if `DOCKERHUB_USERNAME` var + `DOCKERHUB_TOKEN` secret are configured)
+
+Triggers:
+- Push to `main` → `:latest`, `:main`, `:sha-<commit>`
+- Tag `vX.Y.Z` → `:vX.Y.Z`, `:X.Y.Z`, `:X.Y`, `:X`, `:latest`
+
+To cut a release:
+```
+git tag v0.2.0 && git push origin v0.2.0
+```
 
 ## Commit style
 
