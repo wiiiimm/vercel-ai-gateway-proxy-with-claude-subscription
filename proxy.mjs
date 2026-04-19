@@ -22,15 +22,19 @@
 //   PROXY_LOG_HEADERS        default: 0   set to 1 to dump all headers
 //
 //   Split routing (paths forwarded direct to Anthropic, bypassing Vercel):
-//   PROXY_PASSTHROUGH_HOST   default: api.anthropic.com
-//   PROXY_PASSTHROUGH_PATHS  default: /api/oauth/,/api/claude_code/
-//                            comma-separated path prefixes; empty disables
-//                            passthrough (all traffic goes to Vercel).
-//                            Caller's Authorization header is preserved intact
-//                            on passthrough requests — no Vercel key added,
+//   PROXY_PASSTHROUGH_PATHS  default: ""  (disabled)
+//                            comma-separated path prefixes. When set, matching
+//                            paths are forwarded direct to PROXY_PASSTHROUGH_HOST
+//                            (default api.anthropic.com) with the caller's
+//                            Authorization preserved — no Vercel key added,
 //                            no providerOptions.gateway injection. Use for
-//                            endpoints Vercel's gateway doesn't proxy (e.g.
-//                            /api/oauth/usage for rate-limit reporting).
+//                            endpoints Vercel's gateway doesn't proxy, e.g.
+//                            /api/oauth/usage (rate-limit reporting for
+//                            Claude Code / claude-hud). Opt-in because the
+//                            primary value of this proxy is Vercel observability;
+//                            silent bypass is surprising unless requested.
+//   PROXY_PASSTHROUGH_HOST   default: api.anthropic.com  (only used when
+//                                                         PASSTHROUGH_PATHS is set)
 
 import { createServer } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -56,11 +60,13 @@ const TAGS = (process.env.PROXY_TAGS || process.env.OPENCLAW_TAGS || "")
 const LOG_BODY = process.env.PROXY_LOG_BODY !== "0";
 const LOG_HEADERS = process.env.PROXY_LOG_HEADERS === "1";
 
-// Split routing: paths matching PASSTHROUGH_PATHS are forwarded direct to
-// PASSTHROUGH_HOST (default api.anthropic.com) instead of the Vercel gateway.
-// Caller's Authorization is preserved; no gateway key is injected.
+// Split routing (opt-in): paths matching PASSTHROUGH_PATHS are forwarded direct
+// to PASSTHROUGH_HOST (default api.anthropic.com) instead of the Vercel gateway.
+// Caller's Authorization is preserved; no gateway key is injected. Default is
+// empty (disabled) — set PROXY_PASSTHROUGH_PATHS=/api/oauth/ to unlock
+// Claude Code rate-limit fetching via claude-hud.
 const PASSTHROUGH_HOST = process.env.PROXY_PASSTHROUGH_HOST || "api.anthropic.com";
-const PASSTHROUGH_PATHS = (process.env.PROXY_PASSTHROUGH_PATHS ?? "/api/oauth/,/api/claude_code/")
+const PASSTHROUGH_PATHS = (process.env.PROXY_PASSTHROUGH_PATHS ?? "")
   .split(",")
   .map((p) => p.trim())
   .filter(Boolean);

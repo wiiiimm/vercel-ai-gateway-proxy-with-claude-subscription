@@ -166,44 +166,46 @@ aider ...
 | `PROXY_BILLING` | | `subscription` | See [Billing modes](#billing-modes) |
 | `PROXY_LOG_BODY` | | `1` | Log request body summaries |
 | `PROXY_LOG_HEADERS` | | `0` | Log full headers (redacted) |
-| `PROXY_PASSTHROUGH_HOST` | | `api.anthropic.com` | Hostname for split-routed requests. See [Split routing](#split-routing). |
-| `PROXY_PASSTHROUGH_PATHS` | | `/api/oauth/,/api/claude_code/` | Comma-separated path prefixes that bypass Vercel. Empty disables. |
+| `PROXY_PASSTHROUGH_HOST` | | `api.anthropic.com` | Hostname for split-routed requests (only used when `PROXY_PASSTHROUGH_PATHS` is non-empty). See [Split routing](#split-routing-opt-in). |
+| `PROXY_PASSTHROUGH_PATHS` | | *empty (disabled)* | Comma-separated path prefixes to forward direct to Anthropic. Opt-in — see below. |
 | `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK` | | `1` | Downstream: unlocks Claude Code `/fast`. See [Fast mode](#fast-mode-claude-code). |
 
-## Split routing
+## Split routing (opt-in)
 
-Vercel AI Gateway proxies `/v1/messages` and a few neighbour endpoints, but not
-every Anthropic endpoint. Notably, `/api/oauth/usage` (the one that powers
-Claude Code's rate-limit / usage display in tools like
-[claude-hud](https://github.com/jarrodwatts/claude-hud)) isn't proxied by
-Vercel — it needs to land on `api.anthropic.com` directly for Anthropic to
-recognise the OAuth token and return `rate_limits` data.
+**Off by default.** The whole point of this proxy is routing traffic *through*
+Vercel for observability; silently bypassing some paths would be surprising.
+But a small number of Anthropic endpoints aren't proxied by Vercel — most
+notably `/api/oauth/usage`, which powers Claude Code's rate-limit display in
+tools like [claude-hud](https://github.com/jarrodwatts/claude-hud). When the
+caller's OAuth token hits Vercel's gateway on that path, Vercel doesn't know
+what to do and Anthropic never sees it → rate-limit data comes back empty.
 
-**This proxy handles that automatically.** Any request whose path starts with
-one of `PROXY_PASSTHROUGH_PATHS` (default `/api/oauth/` and `/api/claude_code/`)
-is forwarded direct to `PROXY_PASSTHROUGH_HOST` (default `api.anthropic.com`):
+If you want the rate-limit display to work, opt in to split routing:
+
+```yaml
+services:
+  vercel-ai-gateway-proxy:
+    image: ghcr.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription:latest
+    environment:
+      PROXY_GATEWAY_KEY: ${PROXY_GATEWAY_KEY}
+      PROXY_PASSTHROUGH_PATHS: "/api/oauth/,/api/claude_code/"
+```
+
+When enabled, requests whose path starts with any of `PROXY_PASSTHROUGH_PATHS`
+are forwarded direct to `PROXY_PASSTHROUGH_HOST` (default `api.anthropic.com`):
 
 - The caller's `Authorization` header is preserved intact
 - No Vercel gateway key is injected
 - No `providerOptions.gateway` body rewrite happens
-- Log line reads `[passthrough→api.anthropic.com]` for clarity
+- Log line reads `[passthrough→api.anthropic.com]` vs `[gateway]` for clarity
 
 Regular inference traffic (`/v1/messages`, `/v1/messages/count_tokens`, etc.)
-continues to route through Vercel with full observability + tagging.
+continues through Vercel with full observability + tagging regardless. Split
+routing only affects the explicitly listed prefixes.
 
-To disable split routing entirely (all traffic goes to Vercel):
-
-```yaml
-environment:
-  PROXY_PASSTHROUGH_PATHS: ""
-```
-
-To add a custom path:
-
-```yaml
-environment:
-  PROXY_PASSTHROUGH_PATHS: "/api/oauth/,/api/claude_code/,/api/my-extra/"
-```
+**Trade-off:** anything passthrough-routed doesn't appear in your Vercel
+dashboard. That's fine for OAuth/usage endpoints (no interesting billing data)
+but worth knowing before adding arbitrary prefixes to the list.
 
 ## Fast mode (Claude Code)
 
