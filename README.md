@@ -166,6 +166,46 @@ aider ...
 | `PROXY_BILLING` | | `subscription` | See [Billing modes](#billing-modes) |
 | `PROXY_LOG_BODY` | | `1` | Log request body summaries |
 | `PROXY_LOG_HEADERS` | | `0` | Log full headers (redacted) |
+| `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK` | | `1` | Downstream: unlocks Claude Code `/fast`. See [Fast mode](#fast-mode-claude-code). |
+
+## Fast mode (Claude Code)
+
+[Fast mode](https://code.claude.com/docs/en/fast-mode) runs Claude Opus 4.6
+about 2.5x faster at a higher per-token rate. Billed separately as "extra usage"
+at $30/$150 per Mtok in/out — even if you have remaining plan usage. Falls back
+to standard speed/pricing when the fast rate limit hits.
+
+Per [Vercel's docs](https://vercel.com/docs/agent-resources/coding-agents/claude-code#enabling-fast-mode),
+Claude Code needs `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1` in its environment
+to allow `/fast` over the AI Gateway (the org check fails for gateway-routed
+requests since they come from a different Anthropic org).
+
+**This image sets it to `1` by default.** The flag only *unlocks* the
+capability — users still have to type `/fast` inside Claude Code to actually
+enable it. Override to `0` if you want to force-lock it:
+
+```yaml
+services:
+  vercel-ai-gateway-proxy:
+    image: ghcr.io/wiiiimm/vercel-ai-gateway-proxy-with-claude-subscription:latest
+    environment:
+      CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: "0"
+```
+
+**Note:** The env var is consumed by **Claude Code CLI / Agent SDK**, not by
+this proxy. It's set here as a Dockerfile default so docker-compose setups
+using `env_file: .env` on both this proxy and a paired Claude Code container
+get fast-mode-unlocked out of the box. If your Claude Code runs in a container
+that doesn't share env with the proxy, set it there directly — or add it to
+`~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK": "1"
+  }
+}
+```
 
 ## Observability tags
 

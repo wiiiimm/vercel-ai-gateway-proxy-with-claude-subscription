@@ -32,6 +32,7 @@ subscription-billing flow.
 - **The OAuth token must be Vercel-registered.** Vercel creates the OAuth↔subscription binding at login time when `ANTHROPIC_BASE_URL` points through Vercel's gateway. A fresh OAuth token obtained without Vercel in the login flow will 401.
 - **Tag injection** modifies the JSON request body — only for POSTs with parseable bodies. If the body isn't valid JSON, it's passed through unchanged. This is intentional — don't try to handle non-JSON bodies.
 - **Streaming responses** are piped through unchanged. Don't buffer them; that breaks streaming.
+- **`CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`** is set as a Dockerfile ENV default. This env var is NOT read by `proxy.mjs` — it's consumed by Claude Code CLI / Agent SDK in a neighbouring container that shares `.env` via `env_file`. It unlocks the `/fast` command. See the "Fast mode (Claude Code)" section in `README.md`. Do not remove the ENV line; it's deliberately a signal/default for downstream consumers.
 
 ## What NOT to do
 
