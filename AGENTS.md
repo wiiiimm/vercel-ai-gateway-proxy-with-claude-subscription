@@ -33,6 +33,7 @@ subscription-billing flow.
 - **Tag injection** modifies the JSON request body — only for POSTs with parseable bodies. If the body isn't valid JSON, it's passed through unchanged. This is intentional — don't try to handle non-JSON bodies.
 - **Streaming responses** are piped through unchanged. Don't buffer them; that breaks streaming.
 - **`CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`** is set as a Dockerfile ENV default. This env var is NOT read by `proxy.mjs` — it's consumed by Claude Code CLI / Agent SDK in a neighbouring container that shares `.env` via `env_file`. It unlocks the `/fast` command. See the "Fast mode (Claude Code)" section in `README.md`. Do not remove the ENV line; it's deliberately a signal/default for downstream consumers.
+- **Split routing** (`PROXY_PASSTHROUGH_PATHS` / `PROXY_PASSTHROUGH_HOST`): a small set of Anthropic endpoints are forwarded direct to `api.anthropic.com` instead of Vercel. Used because Vercel's gateway doesn't proxy `/api/oauth/usage` (which Claude Code's rate-limit display depends on). On passthrough requests: no Vercel key is added, no body rewrite is applied, caller's `Authorization` is preserved as-is. The log line shows `[passthrough→...]` vs `[gateway]` to make routing visible. When editing: keep the decision (passthrough or not) locked in before any header/body mutation so the two paths don't cross-contaminate.
 
 ## What NOT to do
 

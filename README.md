@@ -166,7 +166,44 @@ aider ...
 | `PROXY_BILLING` | | `subscription` | See [Billing modes](#billing-modes) |
 | `PROXY_LOG_BODY` | | `1` | Log request body summaries |
 | `PROXY_LOG_HEADERS` | | `0` | Log full headers (redacted) |
+| `PROXY_PASSTHROUGH_HOST` | | `api.anthropic.com` | Hostname for split-routed requests. See [Split routing](#split-routing). |
+| `PROXY_PASSTHROUGH_PATHS` | | `/api/oauth/,/api/claude_code/` | Comma-separated path prefixes that bypass Vercel. Empty disables. |
 | `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK` | | `1` | Downstream: unlocks Claude Code `/fast`. See [Fast mode](#fast-mode-claude-code). |
+
+## Split routing
+
+Vercel AI Gateway proxies `/v1/messages` and a few neighbour endpoints, but not
+every Anthropic endpoint. Notably, `/api/oauth/usage` (the one that powers
+Claude Code's rate-limit / usage display in tools like
+[claude-hud](https://github.com/jarrodwatts/claude-hud)) isn't proxied by
+Vercel — it needs to land on `api.anthropic.com` directly for Anthropic to
+recognise the OAuth token and return `rate_limits` data.
+
+**This proxy handles that automatically.** Any request whose path starts with
+one of `PROXY_PASSTHROUGH_PATHS` (default `/api/oauth/` and `/api/claude_code/`)
+is forwarded direct to `PROXY_PASSTHROUGH_HOST` (default `api.anthropic.com`):
+
+- The caller's `Authorization` header is preserved intact
+- No Vercel gateway key is injected
+- No `providerOptions.gateway` body rewrite happens
+- Log line reads `[passthrough→api.anthropic.com]` for clarity
+
+Regular inference traffic (`/v1/messages`, `/v1/messages/count_tokens`, etc.)
+continues to route through Vercel with full observability + tagging.
+
+To disable split routing entirely (all traffic goes to Vercel):
+
+```yaml
+environment:
+  PROXY_PASSTHROUGH_PATHS: ""
+```
+
+To add a custom path:
+
+```yaml
+environment:
+  PROXY_PASSTHROUGH_PATHS: "/api/oauth/,/api/claude_code/,/api/my-extra/"
+```
 
 ## Fast mode (Claude Code)
 

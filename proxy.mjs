@@ -10,16 +10,27 @@
 // key is applied automatically by Vercel to all gateway traffic.
 //
 // Env vars:
-//   PROXY_GATEWAY_KEY     required     Vercel AI Gateway key (vck_...)
+//   PROXY_GATEWAY_KEY        required     Vercel AI Gateway key (vck_...)
 //   PROXY_BILLING            default: subscription  (subscription|vercel)
-//   PROXY_UPSTREAM_URL    default: https://ai-gateway.vercel.sh
-//   PROXY_KEY_HEADER      default: x-ai-gateway-api-key (subscription mode)
-//   PROXY_PORT            default: 3456
-//   PROXY_BIND            default: 0.0.0.0
-//   PROXY_USER            optional     providerOptions.gateway.user
-//   PROXY_TAGS            optional     comma-separated; providerOptions.gateway.tags
-//   PROXY_LOG_BODY        default: 1   set to 0 to disable body summaries
-//   PROXY_LOG_HEADERS     default: 0   set to 1 to dump all headers
+//   PROXY_UPSTREAM_URL       default: https://ai-gateway.vercel.sh
+//   PROXY_KEY_HEADER         default: x-ai-gateway-api-key (subscription mode)
+//   PROXY_PORT               default: 3456
+//   PROXY_BIND               default: 0.0.0.0
+//   PROXY_USER               optional     providerOptions.gateway.user
+//   PROXY_TAGS               optional     comma-separated; providerOptions.gateway.tags
+//   PROXY_LOG_BODY           default: 1   set to 0 to disable body summaries
+//   PROXY_LOG_HEADERS        default: 0   set to 1 to dump all headers
+//
+//   Split routing (paths forwarded direct to Anthropic, bypassing Vercel):
+//   PROXY_PASSTHROUGH_HOST   default: api.anthropic.com
+//   PROXY_PASSTHROUGH_PATHS  default: /api/oauth/,/api/claude_code/
+//                            comma-separated path prefixes; empty disables
+//                            passthrough (all traffic goes to Vercel).
+//                            Caller's Authorization header is preserved intact
+//                            on passthrough requests — no Vercel key added,
+//                            no providerOptions.gateway injection. Use for
+//                            endpoints Vercel's gateway doesn't proxy (e.g.
+//                            /api/oauth/usage for rate-limit reporting).
 
 import { createServer } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -44,6 +55,20 @@ const TAGS = (process.env.PROXY_TAGS || process.env.OPENCLAW_TAGS || "")
   .filter(Boolean);
 const LOG_BODY = process.env.PROXY_LOG_BODY !== "0";
 const LOG_HEADERS = process.env.PROXY_LOG_HEADERS === "1";
+
+// Split routing: paths matching PASSTHROUGH_PATHS are forwarded direct to
+// PASSTHROUGH_HOST (default api.anthropic.com) instead of the Vercel gateway.
+// Caller's Authorization is preserved; no gateway key is injected.
+const PASSTHROUGH_HOST = process.env.PROXY_PASSTHROUGH_HOST || "api.anthropic.com";
+const PASSTHROUGH_PATHS = (process.env.PROXY_PASSTHROUGH_PATHS ?? "/api/oauth/,/api/claude_code/")
+  .split(",")
+  .map((p) => p.trim())
+  .filter(Boolean);
+
+function shouldPassthrough(reqPath) {
+  if (PASSTHROUGH_PATHS.length === 0) return false;
+  return PASSTHROUGH_PATHS.some((prefix) => reqPath.startsWith(prefix));
+}
 
 if (!GATEWAY_KEY) {
   console.error("[proxy] PROXY_GATEWAY_KEY not set; refusing to start");
@@ -113,30 +138,42 @@ const server = createServer((req, res) => {
 
   const chunks = [];
   const started = Date.now();
+  const passthrough = shouldPassthrough(req.url);
   req.on("data", (c) => chunks.push(c));
   req.on("end", () => {
     const originalBody = Buffer.concat(chunks).toString("utf8");
+    // Skip body injection on passthrough — Anthropic doesn't know about
+    // providerOptions.gateway and would 400 on unknown fields.
     const rewrittenBody =
-      req.method === "POST" && originalBody
+      !passthrough && req.method === "POST" && originalBody
         ? injectGatewayOptions(originalBody)
         : originalBody;
     const payload = Buffer.from(rewrittenBody, "utf8");
 
     const headers = { ...req.headers };
-    headers.host = UPSTREAM.hostname;
-    if (MODE === "subscription") {
+    // Strip any gateway key header the caller may have sent (defensive).
+    delete headers[KEY_HEADER];
+
+    if (passthrough) {
+      // Direct-to-Anthropic: preserve caller's Authorization exactly,
+      // no Vercel key, no body rewrites, no tag injection.
+      headers.host = PASSTHROUGH_HOST;
+    } else if (MODE === "subscription") {
       // keep caller's Authorization; add Vercel key as a side-channel header
+      headers.host = UPSTREAM.hostname;
       headers[KEY_HEADER] = `Bearer ${GATEWAY_KEY}`;
     } else {
       // vercel: Vercel key owns Authorization (dashboard BYOK applies if enabled)
+      headers.host = UPSTREAM.hostname;
       headers.authorization = `Bearer ${GATEWAY_KEY}`;
     }
     delete headers["content-length"];
     if (payload.length > 0) headers["content-length"] = String(payload.length);
 
     const incomingAuth = req.headers["authorization"];
+    const route = passthrough ? `passthrough→${PASSTHROUGH_HOST}` : "gateway";
     console.log(
-      `[proxy] → ${req.method} ${req.url} (auth=${redactAuth(incomingAuth)}, injected=${!!(USER || TAGS.length)})`,
+      `[proxy] → ${req.method} ${req.url} [${route}] (auth=${redactAuth(incomingAuth)}, injected=${!passthrough && !!(USER || TAGS.length)})`,
     );
     if (LOG_BODY && req.method === "POST" && originalBody) {
       console.log("[proxy]   body:", JSON.stringify(summarizeBody(rewrittenBody)));
@@ -148,21 +185,26 @@ const server = createServer((req, res) => {
       console.log("[proxy]   headers:", JSON.stringify(safe));
     }
 
-    const proxyReq = upstreamRequest(
+    // Passthrough always uses HTTPS (Anthropic is HTTPS); gateway uses whatever
+    // the UPSTREAM URL says.
+    const requestFn = passthrough ? httpsRequest : upstreamRequest;
+    const targetPort = passthrough ? 443 : upstreamPort;
+    const proxyReq = requestFn(
       {
-        hostname: UPSTREAM.hostname,
-        port: upstreamPort,
+        hostname: passthrough ? PASSTHROUGH_HOST : UPSTREAM.hostname,
+        port: targetPort,
         path: req.url,
         method: req.method,
         headers,
       },
       (proxyRes) => {
         const elapsed = Date.now() - started;
-        const id =
-          proxyRes.headers["x-gateway-request-id"] ||
-          proxyRes.headers["x-vercel-id"] ||
-          "?";
-        console.log(`[proxy] ← ${proxyRes.statusCode} in ${elapsed}ms (id=${id})`);
+        const id = passthrough
+          ? proxyRes.headers["request-id"] || "?"
+          : proxyRes.headers["x-gateway-request-id"] ||
+            proxyRes.headers["x-vercel-id"] ||
+            "?";
+        console.log(`[proxy] ← ${proxyRes.statusCode} in ${elapsed}ms [${route}] (id=${id})`);
         res.writeHead(proxyRes.statusCode, proxyRes.headers);
         proxyRes.pipe(res);
       },
@@ -180,8 +222,12 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, BIND, () => {
+  const passthroughSummary =
+    PASSTHROUGH_PATHS.length > 0
+      ? `passthrough=[${PASSTHROUGH_PATHS.join(",")}]→${PASSTHROUGH_HOST}`
+      : "passthrough=off";
   console.log(
     `[proxy] listening http://${BIND}:${PORT} → ${UPSTREAM.origin} ` +
-      `(billing=${MODE}, user=${USER || "-"}, tags=[${TAGS.join(",")}])`,
+      `(billing=${MODE}, user=${USER || "-"}, tags=[${TAGS.join(",")}], ${passthroughSummary})`,
   );
 });
